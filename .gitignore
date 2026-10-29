@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-*
+.venv/
+.env
+.env.*
+config.json
+协作记录/
+.claude/
+.codex/
+dist/

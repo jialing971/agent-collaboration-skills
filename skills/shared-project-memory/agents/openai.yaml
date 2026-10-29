@@ -1,0 +1,6 @@
+interface:
+  display_name: "共享项目记忆"
+  short_description: "在 Codex 和 Claude 间保存与恢复本地项目进度、决策和验证记录"
+  default_prompt: "使用 $shared-project-memory 读取当前项目最近的交接记录，核对实际文件后继续工作。"
+policy:
+  allow_implicit_invocation: true
