@@ -5,6 +5,8 @@ description: 在本机项目中由 Codex 规划和审核、Claude Code 经 CC Sw
 
 # 开发接力
 
+运行环境：本技能的所有命令仅支持 Windows，包含本地状态与交接命令。
+
 唯一代码源在本 Skill 目录。两端共享同一实际项目目录的 `协作记录/state.sqlite3`；`handoff` 返回计划、完整检查点和审核起点。切换工具不需要重放内部对话。
 
 ## 入口

@@ -12,7 +12,7 @@
 ## 支持范围
 
 - Python 3.10+，仅使用标准库。
-- Windows PowerShell 5.1+。project-relay 的自动执行使用 Windows Job Object 管理进程树，本版只支持 Windows 自动派活。
+- Windows PowerShell 5.1+。本版 project-relay 的所有命令均仅支持 Windows，包含本地状态命令；自动执行使用 Windows Job Object 管理进程树。
 - Git：读取项目分支和审核提交时需要。共享记忆也支持普通文件夹。
 - 实际派活还需要使用者自己的 Claude Code，以及当前实现支持的 CC Switch `claude-desktop` 代理配置。模型费用按使用者的服务计费。
 - 共享记忆 Python CLI 可直接运行；本仓库的首次发布验证以 Windows 为范围，其他系统请自行验证。
@@ -117,7 +117,7 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 & $env:PROJECT_RELAY_PYTHON -X utf8 -B -m unittest discover -s tests -v
 ```
 
-测试在临时目录中运行，覆盖中文路径、记忆保存/检索/隔离、接管、审核边界、模拟执行器超时和进程清理。模拟程序不调用真实模型；测试通过不代表使用者的真实 Claude/CC Switch 路由已验证。发布边界见 [release-scope.md](docs/release-scope.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
+本套测试应在 Windows 上运行。测试在临时目录中执行，覆盖中文路径、记忆保存/检索/隔离、接管、审核边界、模拟执行器超时和进程清理。模拟程序不调用真实模型；测试通过不代表使用者的真实 Claude/CC Switch 路由已验证。发布边界见 [release-scope.md](docs/release-scope.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
 
 提交问题时提供操作系统、Python 版本、脱敏命令和错误。项目摘要、数据库、真实执行日志、配置凭据与缓存不属于技能源码，请留在自己的受控目录。
 
