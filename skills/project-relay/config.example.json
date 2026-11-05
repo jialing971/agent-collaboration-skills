@@ -2,6 +2,7 @@
   "command": ["C:/path/to/claude.exe"],
   "desktop_config": "C:/path/to/active-desktop-config.json",
   "cc_switch_state": "C:/path/to/cc-switch-live-state.json",
+  "cc_switch_db": "C:/path/to/cc-switch.db",
   "expected_provider_id": "your-verified-provider-id",
   "model": "your-desktop-model-alias",
   "expected_upstream_model": "your-verified-upstream-model"

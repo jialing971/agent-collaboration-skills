@@ -44,6 +44,12 @@ Claude Code 使用其用户级目录 `$env:USERPROFILE\.claude\skills`，按相�
 
 安装只是加载操作方法。自动保存项目摘要、执行模型任务和修改项目文件，仍遵循当前用户授权。仓库不会修改全局 `AGENTS.md`、`CLAUDE.md`、系统 PATH 或模型路由。
 
+## 更新
+
+已安装副本不会自动跟随仓库变化。更新时先确认工作区干净并记录当前提交，再执行 `git pull --ff-only`；随后把 `skills/project-relay` 与 `skills/shared-project-memory` 重新复制或重新指向更新后的目录，设置 `PROJECT_RELAY_PYTHON` / `SHARED_PROJECT_MEMORY_PYTHON` 等已有环境变量保持不变。重新打开宿主会话或重启宿主后生效。
+
+更新后可对源目录与安装副本做哈希核对，并运行本仓库测试；实际使用前再按维护文档做一次最小真实任务验证。维护与发布流程见 [维护说明](skills/project-relay/references/maintenance.md)。
+
 ## 配置 Python
 
 两个 PowerShell 入口优先使用下面的环境变量，值为已安装 Python 的可执行文件绝对路径。以下路径是示例，请替换为自己的 Python 3.10+：
@@ -94,12 +100,15 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 | `command` | Claude Code 可执行文件及可选前置参数的数组 |
 | `desktop_config` | 当前生效的 Claude 桌面第三方配置 JSON 的绝对路径 |
 | `cc_switch_state` | CC Switch 当前路由状态 JSON 的绝对路径 |
+| `cc_switch_db` | 可选的 CC Switch 数据库绝对路径；填写时从该库读取当前网关凭据 |
 | `desktop_meta` | 可选的桌面配置元数据 JSON；存在时校验 `appliedId` |
 | `expected_provider_id` | 使用者已核对的 CC Switch 提供商 ID |
 | `model` | 桌面配置中的模型别名 |
 | `expected_upstream_model` | 对应该模型别名的预期上游模型 |
 
-当前实现会校验 CC Switch `apps.claude-desktop` 路由、回环 HTTP 代理、已应用配置及模型映射。它读取桌面配置中的网关凭据，并仅注入执行器子进程；配置例子不包含凭据。其他 CC Switch 版本或网关格式可能需要适配，`doctor` 不通过时先核对配置，勿直接绕过校验。
+当前实现会校验 CC Switch `apps.claude-desktop` 路由、回环 HTTP 代理、已应用配置及模型映射。未配置 `cc_switch_db` 时沿用桌面配置中的网关凭据；配置后每次启动都以只读方式从该 SQLite 库读取 `settings.claude_desktop_gateway_token`，令牌轮换后无需重启即可生效，且不会创建或修改数据库。数据库不可读、令牌缺失或为空白时明确拒绝，不回退到桌面旧凭据。凭据仅注入执行器子进程，不写入配置示例或执行证据。其他 CC Switch 版本或网关格式可能需要适配，`doctor` 不通过时先核对配置，勿直接绕过校验。
+
+`doctor` 只校验配置、文件路径、路由和模型映射，不发起模型请求，因此不能证明当前认证可用；真实认证只在 `run` 时暴露。若上游返回 401，执行器内部可能重试，外层表现为本次运行超时，需结合证据判断，不能仅凭超时认定网络问题。
 
 ```powershell
 & $relayScript -Project 'D:\Projects\demo' --config 'D:\Config\relay.json' doctor
@@ -118,6 +127,14 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 ```
 
 本套测试应在 Windows 上运行。测试在临时目录中执行，覆盖中文路径、记忆保存/检索/隔离、接管、审核边界、模拟执行器超时和进程清理。模拟程序不调用真实模型；测试通过不代表使用者的真实 Claude/CC Switch 路由已验证。发布边界见 [release-scope.md](docs/release-scope.md)，术语见 [GLOSSARY.md](GLOSSARY.md)。
+
+仓库的 GitHub Actions 工作流在 `windows-latest` 上以 Python 3.10 和 3.12 两个版本运行同一测试命令，两个版本互不取消；工作流只读仓库内容，不安装 pip 依赖，不读取使用者配置，也不调用模型：
+
+```powershell
+python -X utf8 -B -m unittest discover -s tests -v
+```
+
+维护、同步和发布检查清单见 [project-relay 维护说明](skills/project-relay/references/maintenance.md)。
 
 提交问题时提供操作系统、Python 版本、脱敏命令和错误。项目摘要、数据库、真实执行日志、配置凭据与缓存不属于技能源码，请留在自己的受控目录。
 

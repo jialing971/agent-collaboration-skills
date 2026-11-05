@@ -139,6 +139,20 @@ def load_executor(path):
     if address.scheme != "http" or address.hostname not in ("localhost", "127.0.0.1", "::1"):
         raise ValueError("执行器只接受已验证的本机 CC Switch 代理")
     key = settings.get("inferenceGatewayApiKey")
+    if config.get("cc_switch_db"):
+        try:
+            gateway = sqlite3.connect(Path(config["cc_switch_db"]).resolve().as_uri() + "?mode=ro",
+                                      uri=True, timeout=5)
+            try:
+                row = gateway.execute("SELECT value FROM settings WHERE key=?",
+                                      ("claude_desktop_gateway_token",)).fetchone()
+            finally:
+                gateway.close()
+        except sqlite3.Error as exc:
+            raise ValueError("无法只读获取 CC Switch 当前网关凭据，请检查 cc_switch_db") from exc
+        key = row[0] if row else None
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("CC Switch 当前网关凭据缺失，不回退到桌面旧凭据")
     if not key or not isinstance(key, str):
         raise ValueError("桌面代理凭据缺失")
     models = {m["name"]: m.get("labelOverride") for m in settings.get("inferenceModels", [])}

@@ -125,6 +125,68 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(result["task"]["owner"], "claude")
 
     @WINDOWS_EXECUTOR
+    def test_executor_uses_current_gateway_token_instead_of_stale_desktop_token(self):
+        task = self.new()
+        config = self.executor_config('import json,os\n'
+            'valid=os.environ["ANTHROPIC_AUTH_TOKEN"] == "CURRENT-GATEWAY-SECRET"\n'
+            'print(json.dumps({"is_error":not valid,"subtype":"success" if valid else "error",'
+            '"result":os.environ["ANTHROPIC_AUTH_TOKEN"]}))\n')
+        gateway = Path(self.tmp.name) / "gateway.sqlite3"
+        with sqlite3.connect(gateway) as db:
+            db.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)")
+            db.execute("INSERT INTO settings VALUES (?,?)",
+                       ("claude_desktop_gateway_token", "CURRENT-GATEWAY-SECRET"))
+        db.close()
+        settings = json.loads(config.read_text(encoding="utf-8"))
+        settings["cc_switch_db"] = str(gateway)
+        config.write_text(json.dumps(settings), encoding="utf-8")
+        before = gateway.read_bytes()
+        result = self.cli("run", "--task", task, config=config)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["task"]["status"], "pending_review")
+        self.assertEqual(gateway.read_bytes(), before)
+        self.assertNotIn("CURRENT-GATEWAY-SECRET", Path(result["evidence"]).read_text(encoding="utf-8"))
+        with sqlite3.connect(gateway) as db:
+            db.execute("UPDATE settings SET value=?", ("ROTATED-GATEWAY-SECRET",))
+        db.close()
+        fake = Path(self.tmp.name) / "fake_claude.py"
+        fake.write_text(fake.read_text(encoding="utf-8").replace(
+            "CURRENT-GATEWAY-SECRET", "ROTATED-GATEWAY-SECRET"), encoding="utf-8")
+        rotated = self.cli("run", "--task", task, config=config)
+        self.assertTrue(rotated["ok"])
+        self.assertNotIn("ROTATED-GATEWAY-SECRET", Path(rotated["evidence"]).read_text(encoding="utf-8"))
+
+    def test_missing_gateway_database_is_rejected_without_creating_it(self):
+        task = self.new()
+        config = self.executor_config('from pathlib import Path\nPath("SHOULD_NOT_EXIST").touch()\n')
+        gateway = Path(self.tmp.name) / "missing.sqlite3"
+        settings = json.loads(config.read_text(encoding="utf-8"))
+        settings["cc_switch_db"] = str(gateway)
+        config.write_text(json.dumps(settings), encoding="utf-8")
+        result = self.cli("run", "--task", task, config=config, ok=False)
+        self.assertIn("网关凭据", result["error"])
+        self.assertFalse(gateway.exists())
+        self.assertFalse((self.project / "SHOULD_NOT_EXIST").exists())
+        self.assertEqual(self.cli("handoff", "--task", task)["task"]["status"], "planned")
+        rejected = next((self.project / "协作记录" / task).glob("执行拒绝-*.json"))
+        self.assertFalse(json.loads(rejected.read_text(encoding="utf-8"))["executor_started"])
+
+    def test_missing_gateway_token_never_falls_back_to_desktop_credentials(self):
+        task = self.new()
+        config = self.executor_config('from pathlib import Path\nPath("SHOULD_NOT_EXIST").touch()\n')
+        gateway = Path(self.tmp.name) / "gateway.sqlite3"
+        with sqlite3.connect(gateway) as db:
+            db.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT)")
+        db.close()
+        settings = json.loads(config.read_text(encoding="utf-8"))
+        settings["cc_switch_db"] = str(gateway)
+        config.write_text(json.dumps(settings), encoding="utf-8")
+        result = self.cli("run", "--task", task, config=config, ok=False)
+        self.assertIn("不回退", result["error"])
+        self.assertFalse((self.project / "SHOULD_NOT_EXIST").exists())
+        self.assertEqual(self.cli("handoff", "--task", task)["task"]["status"], "planned")
+
+    @WINDOWS_EXECUTOR
     def test_timeout_preserves_evidence_and_releases_execution(self):
         task = self.new()
         config = self.executor_config('import time\ntime.sleep(30)\n')
