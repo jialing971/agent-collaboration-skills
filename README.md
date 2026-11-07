@@ -88,10 +88,12 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 # 将下列 ID 替换为 new 返回的 task.id
 & $relayScript -Project 'D:\Projects\demo' takeover --task '任务ID' --agent claude
 & $relayScript -Project 'D:\Projects\demo' checkpoint --task '任务ID' --agent claude --file 'D:\Projects\demo\阶段摘要.md'
-& $relayScript -Project 'D:\Projects\demo' handoff --task '任务ID'
+& $relayScript -Project 'D:\Projects\demo' handoff --task '任务ID' --brief
 ```
 
 计划写明目标、允许修改的范围和验收。任务状态与证据存入实际项目的 `协作记录/`。代码必须位于同一个实际项目目录，或另行通过 Git 同步；记录不会迁移运行中的进程、未落盘对话或终端状态。
+
+模型间交接和 `run` 默认使用 `handoff --brief`：只包含任务身份与完整计划、最近一个检查点、最近一条 Codex 审核/返工意见、最近一次执行的 ok/error/结束时间与证据路径、审核起点、当前分支和简短改动概况，不携带历史 events、stdout/stderr、tool payload 或 live JSONL，也不调用模型做摘要。计划超过 12000 字符会明确拒绝并提示先整理计划；整体序列化上下文超过 20000 字符同样在启动执行器、创建执行批次或改变任务状态之前拒绝，不会静默截断验收条件。返回中的 `context_chars` / `context_limit` 是实际字符数与上限，不是精确 token 数。需要人工追溯全部事件、多份检查点和原始输出时，使用不带 `--brief` 的完整 `handoff`。
 
 自动派活前，复制 [config.example.json](skills/project-relay/config.example.json) 到当前用户的 `.project-relay/config.json`，填写自己的绝对路径和预期路由。也可通过 `--config` 使用其他位置。JSON 中的占位路径不会展开环境变量。
 
@@ -105,6 +107,7 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 | `expected_provider_id` | 使用者已核对的 CC Switch 提供商 ID |
 | `model` | 桌面配置中的模型别名 |
 | `expected_upstream_model` | 对应该模型别名的预期上游模型 |
+| `dashboard` | 可选布尔值，默认未配置即 `false`；设为 `true` 时 `run` 会启动或复用只读看板并打开当前任务 |
 
 当前实现会校验 CC Switch `apps.claude-desktop` 路由、回环 HTTP 代理、已应用配置及模型映射。未配置 `cc_switch_db` 时沿用桌面配置中的网关凭据；配置后每次启动都以只读方式从该 SQLite 库读取 `settings.claude_desktop_gateway_token`，令牌轮换后无需重启即可生效，且不会创建或修改数据库。数据库不可读、令牌缺失或为空白时明确拒绝，不回退到桌面旧凭据。凭据仅注入执行器子进程，不写入配置示例或执行证据。其他 CC Switch 版本或网关格式可能需要适配，`doctor` 不通过时先核对配置，勿直接绕过校验。
 
@@ -117,6 +120,34 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 ```
 
 `run` 成功且状态为 `pending_review` 只表示等待复核。Codex 应独立检查文件、运行适当测试；在工作区干净且提交固定后，使用 `approve --task ... --agent codex --revision ... --report ...` 记录审核基线。角色参数是操作约定，不能认证调用者身份。执行器拥有本地文件与命令权限；进程树管理不提供文件访问隔离。
+
+`run` 还使用流式输出，把每次派活写成独立 attempt 的 `协作记录/<task>/live-<attempt>.jsonl`。执行器运行期间即可看到工具调用、工具结果、公开 assistant 文本/文本增量、stderr 和最终 result；thinking 内容不写入。合法的 `system/thinking_tokens` 统计不进入 live 或证据操作流，也不会被当作协议错误；只有 `system/init` 表示会话初始化，`status` 和 `task_summary` 分别按状态和任务摘要归类。运行结束仍保留 `执行-<attempt>.json` 证据，成功判定继续要求返回码 0、`is_error: false`、`subtype: success` 且没有权限拒绝。运行时网关 token 在写入 live、证据和 HTTP 状态前替换。
+
+阶段复核（不固定提交基线）使用：
+
+```powershell
+& $relayScript -Project 'D:\Projects\demo' review --task '任务ID' --agent codex --outcome passed --file 'D:\Projects\demo\阶段审核.md'
+& $relayScript -Project 'D:\Projects\demo' review --task '任务ID' --agent codex --outcome changes_requested --file 'D:\Projects\demo\返工.md'
+```
+
+`review` 要求 Codex 是当前负责人且没有存活的执行进程。`passed` 把状态置为 `reviewed`（阶段复核通过，待最终验收），`changes_requested` 置为 `changes_requested`；两者都不写 `reviewed_sha` 或审核基线，只有 `approve` 才会置为 `approved`。第 2 次执行或返工状态会在看板中显示为返工中。
+
+## 只读看板
+
+看板显示派活目标与验收、任务阶段、Claude 实时操作与日志、Codex 复核与返工记录。它只读取当前项目已有的 SQLite 和 live JSONL，不提供网页派活、暂停、终止或审批入口。阶段使用中文标签；`review passed` 显示为“阶段复核通过，待最终验收”，只有 `approve` 后才是“最终验收通过”。工具与事件摘要由本地确定性规则生成，不调用模型做总结。
+
+```powershell
+# 启动或复用本项目的本机只读服务，并返回 url / pid / port / token
+& $relayScript -Project 'D:\Projects\demo' dashboard --task '任务ID' --no-open
+# 不指定任务时打开任务列表：dashboard --no-open
+# 显式打开浏览器：去掉 --no-open
+# 停止本项目看板服务
+& $relayScript -Project 'D:\Projects\demo' dashboard --stop
+```
+
+服务默认绑定 `127.0.0.1`；`--port 0` 自动分配端口。URL 带随机能力 token，API 只接受本机 `Host`/`Origin`，没有写接口和宽松 CORS，静态资源为固定白名单。服务进程独立于本次派活的 Windows Job Object，关闭浏览器不会停止 Claude；需要停止时使用 `dashboard --stop`。服务日志集中在 `协作记录/看板/`，不继承执行器注入的模型 token 环境，也不读取模型配置。读取既有 live 文件时会先忽略 `system/thinking_tokens` 统计噪声，再决定最近 5000 条窗口，不改写历史证据原件；页面把相邻文本增量合并为一条持续输出，不展示 thinking，也不为每个增量单独占行。单次执行超过 5000 条有效事件时，接口返回最近 5000 条及窗口偏移，页面按偏移删除头部旧行后继续追加新事件，保留滚动位置和展开状态。
+
+在用户配置中把 `dashboard` 设为 `true` 后，每次 `run` 都会启动或复用看板、通过系统默认浏览器打开对应任务，并在返回 JSON 中提供 `dashboard_url`；未配置或为 `false` 时不启动服务。看板启动失败会在 `run` 结果中给出 `dashboard_error`，不会返回不可用的 URL；显式 `dashboard` 命令启动失败则直接报错。任务状态和实时数据约 1 秒刷新，最后事件时间、断线、控制进程退出、失败和不完整尾行都会显示。
 
 ## 验证与贡献
 

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>接力看板</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="frame">
+  <aside class="sidebar" aria-label="项目与任务">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="5.5" cy="12" r="2.5"></circle>
+          <circle cx="18.5" cy="6" r="2"></circle>
+          <circle cx="18.5" cy="18" r="2"></circle>
+          <path d="M8 12h4l4.5-5M12 12l4.5 5"></path>
+        </svg>
+      </span>
+      <span class="brand-copy">
+        <strong>接力看板</strong>
+        <span id="project-name" class="muted small">只读</span>
+      </span>
+    </div>
+    <label class="search">
+      <span class="sr-only">搜索任务</span>
+      <input id="task-search" type="search" placeholder="搜索任务或 ID" autocomplete="off">
+    </label>
+    <nav id="task-list" class="task-list" aria-label="任务列表"></nav>
+    <div class="sidebar-foot">
+      <span class="dot dot-idle" aria-hidden="true"></span>
+      <span>只读看板</span>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <div class="topbar-title">
+      <h1 id="task-title">接力看板</h1>
+      <span id="task-subtitle" class="muted small">选择左侧任务查看执行</span>
+    </div>
+    <div class="connection" id="connection" role="status">
+      <span class="dot" id="connection-dot" aria-hidden="true"></span>
+      <span id="connection-text">连接中</span>
+    </div>
+  </header>
+
+  <main class="sheet">
+    <div id="status-banner" class="banner" hidden></div>
+
+    <section class="stagebar" id="stagebar" aria-label="任务阶段"></section>
+
+    <div class="summary-grid">
+      <article class="card plan-card">
+        <header class="card-head">
+          <h2>派活目标与验收</h2>
+          <button id="plan-toggle" class="text-button" type="button">收起</button>
+        </header>
+        <div id="plan-body" class="plan-body">
+          <pre id="plan-text" class="plan-text"></pre>
+        </div>
+        <p id="plan-meta" class="muted small plan-meta"></p>
+      </article>
+
+      <aside class="card review-card">
+        <header class="card-head">
+          <h2>复核与返工记录</h2>
+        </header>
+        <div id="review-list" class="review-list"></div>
+      </aside>
+    </div>
+
+    <section class="card log-card">
+      <header class="card-head log-head">
+        <h2>Claude 实时操作与日志</h2>
+        <div class="log-tools">
+          <select id="attempt-select" aria-label="执行批次" hidden></select>
+          <label class="search log-search">
+            <span class="sr-only">过滤日志</span>
+            <input id="log-filter" type="search" placeholder="过滤日志" autocomplete="off">
+          </label>
+          <label class="follow">
+            <input id="auto-follow" type="checkbox" checked>
+            <span>自动跟随</span>
+          </label>
+        </div>
+      </header>
+      <div id="log-status" class="log-status muted small"></div>
+      <ol id="log-list" class="log-list" aria-live="polite"></ol>
+      <div id="log-empty" class="empty" hidden>
+        该任务暂无实时日志。派活后这里会显示 Claude 的工具调用、文本输出与错误。
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

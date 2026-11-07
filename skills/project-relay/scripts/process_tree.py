@@ -1,7 +1,33 @@
-"""Windows job lifetime for a gated worker and all processes it launches."""
+"""Windows process helpers: job lifetime and liveness checks."""
 import ctypes
 from ctypes import wintypes
 import os
+
+
+def process_alive(pid):
+    if not pid:
+        return False
+    if os.name == "nt":
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        api.OpenProcess.restype = wintypes.HANDLE
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        api.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        handle = api.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5  # Access denied: treat as running.
+        try:
+            status = wintypes.DWORD()
+            return not api.GetExitCodeProcess(handle, ctypes.byref(status)) or status.value == 259
+        finally:
+            api.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 class ProcessTree:
