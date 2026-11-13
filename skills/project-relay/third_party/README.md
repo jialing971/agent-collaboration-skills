@@ -19,3 +19,5 @@
 - `eventStatus`：由事件类型和 payload 派生 running / completed / failed。
 
 只保留只读看板所需的分支；去除了上游的 React、筛选器、图标注册表、StructuredOutput 专用分支和宿主 hook 接入。中文标签、配色、布局与 relay 的事件结构由本项目实现。没有引入上游的 Docker、前端构建链或任何 npm 运行依赖。
+
+`skills/project-relay/scripts/terminal.py` 将上述 `oneLine`、`relativePath`、`extractBashBinary` 和工具摘要规则继续适配为 Python 标准库实现，用于终端中的日志摘要。终端流式追加、控制字符清理、开窗与就绪检查由本项目实现，沿用上述 MIT 许可及版权声明。

@@ -100,6 +100,7 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 | 配置字段 | 内容 |
 |---|---|
 | `command` | Claude Code 可执行文件及可选前置参数的数组 |
+| `claude_code_root` | 可选的 Claude 桌面 `claude-code` 安装根目录绝对路径；每次运行自动选择并验证已安装版本，适配桌面升级 |
 | `desktop_config` | 当前生效的 Claude 桌面第三方配置 JSON 的绝对路径 |
 | `cc_switch_state` | CC Switch 当前路由状态 JSON 的绝对路径 |
 | `cc_switch_db` | 可选的 CC Switch 数据库绝对路径；填写时从该库读取当前网关凭据 |
@@ -107,11 +108,14 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 | `expected_provider_id` | 使用者已核对的 CC Switch 提供商 ID |
 | `model` | 桌面配置中的模型别名 |
 | `expected_upstream_model` | 对应该模型别名的预期上游模型 |
+| `terminal` | 可选布尔值，设为 `true` 时 `run` 自动打开独立终端看板，配置示例已启用 |
 | `dashboard` | 可选布尔值，默认未配置即 `false`；设为 `true` 时 `run` 会启动或复用只读看板并打开当前任务 |
 
 当前实现会校验 CC Switch `apps.claude-desktop` 路由、回环 HTTP 代理、已应用配置及模型映射。未配置 `cc_switch_db` 时沿用桌面配置中的网关凭据；配置后每次启动都以只读方式从该 SQLite 库读取 `settings.claude_desktop_gateway_token`，令牌轮换后无需重启即可生效，且不会创建或修改数据库。数据库不可读、令牌缺失或为空白时明确拒绝，不回退到桌面旧凭据。凭据仅注入执行器子进程，不写入配置示例或执行证据。其他 CC Switch 版本或网关格式可能需要适配，`doctor` 不通过时先核对配置，勿直接绕过校验。
 
-`doctor` 只校验配置、文件路径、路由和模型映射，不发起模型请求，因此不能证明当前认证可用；真实认证只在 `run` 时暴露。若上游返回 401，执行器内部可能重试，外层表现为本次运行超时，需结合证据判断，不能仅凭超时认定网络问题。
+设置 `claude_code_root` 后，每次 `doctor` 和 `run` 在 `<根目录>/<版本>/<构建>/claude.exe` 中按数字版本号及同版本文件更新时间选择候选，并通过最长 10 秒的 `--version` 校验。更新尚未完成的空文件、无法运行或版本不符的候选会跳过，已有可用版本仍可使用；全部失败时给出明确错误。结果用于当次执行，配置文件保持原值，`command` 的其余参数继续生效。省略该字段时使用固定路径。
+
+`doctor` 校验配置、文件路径、路由和模型映射，启用自动发现时还执行 `--version`，不发起模型请求，因此不能证明当前认证可用；真实认证只在 `run` 时暴露。若上游返回 401，执行器内部可能重试，外层表现为本次运行超时，需结合证据判断，不能仅凭超时认定网络问题。
 
 ```powershell
 & $relayScript -Project 'D:\Projects\demo' --config 'D:\Config\relay.json' doctor
@@ -132,7 +136,24 @@ $relayScript = '.\skills\project-relay\scripts\relay.ps1'
 
 `review` 要求 Codex 是当前负责人且没有存活的执行进程。`passed` 把状态置为 `reviewed`（阶段复核通过，待最终验收），`changes_requested` 置为 `changes_requested`；两者都不写 `reviewed_sha` 或审核基线，只有 `approve` 才会置为 `approved`。第 2 次执行或返工状态会在看板中显示为返工中。
 
-## 只读看板
+## 终端看板
+
+将用户配置的 `terminal` 设为 `true`、`dashboard` 设为 `false`，每次 `run` 即自动打开独立终端窗口。同一任务的目标与验收、Claude 实时操作与结果、Codex 审核和返工持续追加到中文滚动日志中。终端在 Claude 结束后继续跟随审核变化，可滚动回看。按 Ctrl+C 或关闭查看窗口时，Claude 的执行继续进行。
+
+```powershell
+# 手动打开独立窗口，返回就绪进程的 PID
+& $relayScript -Project 'D:\Projects\demo' monitor --task '任务ID' --open
+# 在当前终端持续查看
+& $relayScript -Project 'D:\Projects\demo' monitor --task '任务ID'
+# 读取一次，便于脚本检查
+& $relayScript -Project 'D:\Projects\demo' monitor --task '任务ID' --once
+```
+
+`--interval 1` 指定正数刷新秒数。直接查看输出中文文本，`--open` 和原有命令保留 JSON 协议。自动开窗确认就绪后返回 `terminal_pid`，失败时返回 `terminal_error`，派活继续进行。同时配置 `terminal: true` 和 `dashboard: true` 时终端优先。省略 `terminal` 时沿用原有配置行为。
+
+终端复用只读 SQLite 状态和脱敏 live JSONL，查看过程使用 Python 标准库。相邻文本增量在同一行持续追加，完整回复到达时合并显示，工具输出可按所示原日志路径追溯。阶段复核与最终验收分别显示。窗口在派活进程树之外运行，查看与刷新无需额外模型调用。
+
+## 浏览器看板
 
 看板显示派活目标与验收、任务阶段、Claude 实时操作与日志、Codex 复核与返工记录。它只读取当前项目已有的 SQLite 和 live JSONL，不提供网页派活、暂停、终止或审批入口。阶段使用中文标签；`review passed` 显示为“阶段复核通过，待最终验收”，只有 `approve` 后才是“最终验收通过”。工具与事件摘要由本地确定性规则生成，不调用模型做总结。
 

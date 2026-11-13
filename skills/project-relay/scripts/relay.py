@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import sqlite3
 import subprocess
 import sys
@@ -307,6 +308,43 @@ def brief_handoff(db, project, task_id):
     return {"brief": context, "context_chars": len(text), "context_limit": CONTEXT_LIMIT}
 
 
+def resolve_executor_command(command, search_root):
+    if search_root is None:
+        if not Path(command[0]).is_file():
+            raise ValueError("执行器文件不存在，请核对桌面 Claude Code 版本路径")
+        return command
+    if not isinstance(search_root, str) or not search_root.strip() or not Path(search_root).is_absolute():
+        raise ValueError("claude_code_root 必须为 Claude 桌面执行器安装根目录的绝对路径")
+    root = Path(search_root).resolve()
+    candidates = []
+    for executable in root.glob("*/*/claude.exe"):
+        version = executable.parent.parent.name
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            continue
+        try:
+            if not executable.resolve().is_relative_to(root) or not executable.is_file():
+                continue
+            stat = executable.stat()
+            if stat.st_size:
+                candidates.append((tuple(map(int, version.split("."))), stat.st_mtime_ns,
+                                   str(executable), version))
+        except OSError:
+            continue
+    probe_env = os.environ.copy()
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"):
+        probe_env.pop(name, None)
+    for _, _, executable, version in sorted(candidates, reverse=True):
+        try:
+            result = subprocess.run([executable, "--version"], capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=10, env=probe_env,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            if result.returncode == 0 and result.stdout.strip() == f"{version} (Claude Code)":
+                return [executable, *command[1:]]
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    raise ValueError("Claude 安装根目录中没有通过 --version 校验的执行器，请等待更新完成或核对 claude_code_root")
+
+
 def load_executor(path):
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     settings = json.loads(Path(config["desktop_config"]).read_text(encoding="utf-8-sig"))
@@ -346,8 +384,8 @@ def load_executor(path):
     command = config["command"]
     if not isinstance(command, list) or not command or not all(isinstance(v, str) for v in command):
         raise ValueError("command 必须为可执行文件及参数数组")
-    if not Path(command[0]).is_file():
-        raise ValueError("执行器文件不存在，请核对桌面 Claude Code 版本路径")
+    command = resolve_executor_command(command, config.get("claude_code_root"))
+    config["command"] = command
     env = os.environ.copy()
     for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDECODE"):
         env.pop(name, None)
@@ -441,16 +479,26 @@ def run_task(args, project, db):
     result = {"started_at": now(), "route": metadata, "ok": False, "error": "执行尚未结束",
               "attempt_id": attempt_id, "attempt_number": attempt_number,
               "session_id": None, "live": str(live_path),
-              "context_chars": len(brief_text), "context_limit": CONTEXT_LIMIT}
+              "context_chars": len(brief_text), "context_limit": CONTEXT_LIMIT,
+              "terminal_pid": None, "terminal_error": None,
+              "dashboard_error": None}
+    live.write("started", {"attempt_number": attempt_number, "model": metadata["model"]})
+    terminal_pid = None
     dashboard_url = None
-    if config.get("dashboard") is True:
+    if config.get("terminal") is True:
+        try:
+            from terminal import open_window
+            terminal_pid = open_window(project, task=args.task)["pid"]
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            result["terminal_error"] = f"终端看板启动失败：{exc}"
+    elif config.get("dashboard") is True:
         try:
             from dashboard import start as start_dashboard
             dashboard_url = start_dashboard(project, task=args.task, open_browser=True)["url"]
         except (ValueError, OSError, sqlite3.Error) as exc:
             result["dashboard_error"] = f"看板启动失败：{exc}"
+    result["terminal_pid"] = terminal_pid
     evidence.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    live.write("started", {"attempt_number": attempt_number, "model": metadata["model"]})
     process = None
     tree = None
     timed_out = False
@@ -715,7 +763,9 @@ def run_task(args, project, db):
             event(db, args.task, "claude", "execution", safe)
         index(project, db)
     return {"ok": result["ok"], "evidence": str(evidence), "task": task_row(db, args.task),
-            "error": result["error"], "dashboard_url": dashboard_url,
+            "error": result["error"], "terminal_pid": result.get("terminal_pid"),
+            "terminal_error": result.get("terminal_error"),
+            "dashboard_url": dashboard_url,
             "dashboard_error": result.get("dashboard_error")}
 
 
@@ -749,6 +799,11 @@ def parser():
     review.add_argument("--outcome", choices=("passed", "changes_requested"), required=True)
     review.add_argument("--file", type=Path, required=True)
     commands.add_parser("doctor")
+    monitor = commands.add_parser("monitor")
+    monitor.add_argument("--task", required=True)
+    monitor.add_argument("--interval", type=float, default=1.0)
+    monitor.add_argument("--once", action="store_true")
+    monitor.add_argument("--open", action="store_true")
     dashboard = commands.add_parser("dashboard")
     dashboard.add_argument("--port", type=int, default=0)
     dashboard.add_argument("--task")
@@ -765,6 +820,9 @@ def execute(args):
     project = Path(args.project).resolve()
     if args.action == "doctor":
         return load_executor(args.config)[2]
+    if args.action == "monitor":
+        from terminal import monitor_command
+        return monitor_command(args, project)
     if args.action == "dashboard":
         from dashboard import dashboard_command
         return dashboard_command(args, project)
@@ -849,7 +907,11 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     try:
-        result = execute(parser().parse_args())
+        args = parser().parse_args()
+        if args.action == "monitor" and not args.open:
+            from terminal import monitor_text
+            return monitor_text(args, Path(args.project).resolve())
+        result = execute(args)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except (ValueError, OSError, sqlite3.Error, KeyError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
