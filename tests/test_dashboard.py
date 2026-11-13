@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import os
 import socket
@@ -8,10 +9,14 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, quote, urlsplit
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/project-relay/scripts/relay.py"
+sys.path.insert(0, str(SCRIPT.parent))
+import relay as relay_cli  # noqa: E402
 DASHBOARD_ASSETS = Path(__file__).resolve().parents[1] / "skills/project-relay/dashboard"
 WINDOWS_EXECUTOR = unittest.skipUnless(sys.platform == "win32", "看板服务仅 Windows 支持")
 
@@ -398,7 +403,7 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse((self.project / "协作记录" / "看板" / "server.json").exists())
 
     def test_run_with_dashboard_config_starts_server_and_opens_task(self):
-        # 使用假浏览器脚本记录 URL，不打开真实浏览器。
+        # 在浏览器边界校验 URL，同时拦截原生启动入口。
         self.addCleanup(self.stop)
         config = self.executor_config(
             "import json,sys\nsys.stdin.read()\n"
@@ -408,18 +413,37 @@ class DashboardTests(unittest.TestCase):
             "print(json.dumps({'type':'result','subtype':'success','is_error':False,"
             "'result':'完成','session_id':'session-dash'}), flush=True)\n",
             dashboard=True)
-        browser = Path(self.tmp.name) / "fake_browser.bat"
-        browser.write_text('@echo off\r\necho opened > "%~dp0opened.txt"\r\n', encoding="utf-8")
-        result = self.cli("run", "--task", self.task, config=config,
-                          env={"BROWSER": str(browser)})
+        output = io.StringIO()
+        command = [str(SCRIPT), "--project", str(self.project), "--config", str(config),
+                   "run", "--task", self.task]
+        processes = []
+        real_popen = subprocess.Popen
+
+        def start_process(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        def close_processes():
+            self.stop()
+            for process in processes:
+                process.wait(timeout=5)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+
+        self.addCleanup(close_processes)
+        with patch("webbrowser.open", return_value=True) as browser:
+            with patch.object(sys, "argv", command), redirect_stdout(output):
+                with patch("os.startfile") as native_browser, patch.object(
+                        subprocess, "Popen", side_effect=start_process):
+                    code = relay_cli.main()
+        self.assertEqual(code, 0, output.getvalue())
+        result = json.loads(output.getvalue())
         self.assertTrue(result["ok"])
         self.assertIn(self.task, result["dashboard_url"])
-        opened = Path(self.tmp.name) / "opened.txt"
-        deadline = time.monotonic() + 5
-        while not opened.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(opened.exists(), "自动打开应调用系统浏览器")
-        self.assertIn("opened", opened.read_text(encoding="utf-8", errors="replace"))
+        browser.assert_called_once_with(result["dashboard_url"])
+        native_browser.assert_not_called()
         parts = urlsplit(result["dashboard_url"])
         token = parse_qs(parts.query)["token"][0]
         self.server = {"port": parts.port, "token": token}
