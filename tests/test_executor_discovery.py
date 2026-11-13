@@ -20,7 +20,7 @@ class ExecutorDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.folder = Path(self.temp.name)
+        self.folder = Path(self.temp.name).resolve()
         self.root = self.folder / "claude-code"
         self.settings = self.folder / "desktop.json"
         self.settings.write_text(json.dumps({

@@ -27,7 +27,7 @@ class TerminalTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="terminal-test-")
         self.addCleanup(self.tmp.cleanup)
-        self.project = Path(self.tmp.name) / "中文 项目"
+        self.project = (Path(self.tmp.name) / "中文 项目").resolve()
         self.project.mkdir()
         self.plan = Path(self.tmp.name) / "计划.md"
         self.plan.write_text(
